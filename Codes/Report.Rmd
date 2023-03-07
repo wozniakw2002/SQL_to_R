@@ -1,0 +1,712 @@
+---
+title: "Praca domowa 2"
+author: "Wiktor Woźniak"
+date: "`r Sys.Date()`"
+output: html_document
+
+---
+# Wstęp
+
+Ten projekt ma na celu oddtworzenie pięciu różnych zapytań SQL w R. Każde zapytanie zostało wykonane na 4 sposoby: 
+  
+1. Pakiet sqldf  
+2. Bazowe funkcje R  
+3. Pakiet dplyr  
+4. Pakiet data.table  
+  
+Dodatkowo dla każdego zapytania zostały wykonane sprawdzenia poprawności wyników oraz porównanie czasów wykonania za pomocą pakietu microbenchmark.  
+  
+Operuję na ramkach danych ze strony https://travel.stackexchange.com/. Dodatkowo w celu wyjaśnienia zapytań korzystam ze strony https://meta.stackexchange.com/questions/2677/database-schema-documentation-for-the-public-data-dump-and-sede/2678#2678 oraz https://ia600107.us.archive.org/27/items/stackexchange/readme.txt
+  
+# Przygotowanie do pracy  
+
+Instalacja pakietów oraz zaczytanie plików
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+
+library(sqldf)
+library(dplyr)
+library(data.table)
+library(microbenchmark)
+options(stringsAsFactors=FALSE)
+Badges <- read.csv("Badges.csv.gz")
+Comments <- read.csv("Comments.csv.gz")
+PostLinks <- read.csv("PostLinks.csv.gz")
+Posts <- read.csv("Posts.csv.gz")
+Tags <- read.csv("Tags.csv.gz")
+Users <- read.csv("Users.csv.gz")
+Votes <- read.csv("Votes.csv.gz")
+```
+
+# Zadanie 1
+
+Wybór etykiet oraz ich ilości, wtedy gdy ilość jest większa od 1000. Etykiety są posortowane malejąco po ilości.   
+
+## Zapytanie sql
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_sql_1 <- function(Tags){
+  sqldf(
+    "SELECT Count, TagName
+    FROM Tags
+    WHERE Count > 1000
+    ORDER BY Count DESC"
+)
+}
+
+```
+
+## Zapytanie bazowe
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_base_1 <- function(Tags){
+    
+    # Wybór odpowiedniej podramki z powyższej ramki
+    wynik <- Tags[Tags$Count >= 1000, c("Count","TagName")]
+    
+    # Posortowanie wyników malejąco oraz sformatowanie wyniku
+    wynik <- wynik[order(wynik$Count, decreasing = TRUE),]
+    row.names(wynik) <- NULL
+    wynik
+}
+
+```
+
+## Zapytanie dplyr
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_dplyr_1 <- function(Tags){
+  
+  # Wybór odpowiedniej podramki z powyższej ramki 
+  wynik <- select(filter(Tags, Count > 1000), Count, TagName)
+  
+  # Posortowanie wyników malejąco oraz sformatowanie wyniku
+  arrange(wynik, desc(Count))
+
+}
+
+```
+
+## Zapytanie data.table
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_table_1 <- function(Tags){
+  
+  # Zmiana typu na data.table
+  Tags <- as.data.table(Tags)
+  
+  # Wybór odpowiedniej podramki z powyższej ramki
+  wynik <- Tags[Count > 1000, .(Count, TagName)]
+  
+  # Posortowanie wyników malejąco oraz sformatowanie wyniku
+  wynik[order(-Count)]
+}
+```
+
+### Sprawdzenie poprawności wyników i porównanie czasów wykonania
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+dplyr::all_equal(df_sql_1(Tags), df_base_1(Tags))
+dplyr::all_equal(df_sql_1(Tags), df_dplyr_1(Tags))
+dplyr::all_equal(df_sql_1(Tags), df_table_1(Tags))
+microbenchmark::microbenchmark(
+  sqldf = df_sql_1(Tags),
+  base = df_base_1(Tags),
+  dplyr = df_dplyr_1(Tags),
+  data.table = df_table_1(Tags)
+)
+```
+
+## Zadanie 2
+
+Wybór dziesięciu najczęściej wskazywanych przez użytkowników lokalizacji posortowanych malejąco po ilości.  
+
+
+## Zapytanie sql
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_sql_2 <- function(Users, Posts){
+  sqldf(
+    "SELECT Location, COUNT(*) AS Count
+    FROM (
+      SELECT Posts.OwnerUserId, Users.Id, Users.Location
+      FROM Users
+      JOIN Posts ON Users.Id = Posts.OwnerUserId
+    )
+    WHERE Location NOT IN ('')
+    GROUP BY Location
+    ORDER BY Count DESC
+    LIMIT 10"
+  )
+}
+
+```
+
+## Zapytanie bazowe
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_base_2 <- function(Users, Posts){
+    
+    # Złączenie ramek Posts i Users oraz wybór odpowiednich kolumn
+    polaczone <- merge(Users[c("Id", "Location")], Posts["OwnerUserId"], by.x = "Id", by.y =  "OwnerUserId")
+    
+    # Wykonanie operacji na powyższej ramce  
+    lokacja <- polaczone[polaczone$Location != '',]
+    aggregate(
+      lokacja$Location,
+      by = list(lokacja$Location),
+      FUN = length
+    ) -> wynik
+    
+    # Formatowanie wyniku
+    colnames(wynik) <- c("Location", "Count")
+    wynik <- head(wynik[order(wynik$Count, decreasing = TRUE),], 10)
+    rownames(wynik) <- NULL
+    wynik
+    
+}
+
+```
+
+## Zapytanie dplyr
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_dplyr_2 <- function(Users, Posts){
+   
+    # Złączenie ramek Posts i Users oraz wybór odpowiednich kolumn
+    polaczone <- inner_join(select(Posts, OwnerUserId),select(Users,Id,Location), by = c("OwnerUserId" = "Id"))
+  # # Wykonanie operacji na powyższej ramce 
+  wynik <- 
+    filter(polaczone, Location != '') %>%
+    count(Location)
+  # Formatowanie wyników
+  wynik = rename(wynik, Count = n)
+  wynik <- arrange(wynik, desc(Count))
+  slice(wynik, 1:10)
+  
+}
+
+```
+
+## Zapytanie data.table
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_table_2 <- function(Users, Posts){
+  
+  # Zmiana typu na data.table
+  Posts <- as.data.table(Posts)
+  Users <- as.data.table(Users)
+  
+  # Złączenie ramek Posts i Users oraz wybór odpowiednich kolumn
+  setkey(Posts, OwnerUserId)
+  setkey(Users, Id)
+  Posts <- Posts[Users, nomatch = 0, .(Id, Location)]
+  
+  # Wykonanie operacji na powyższej ramce i formatowanie wyników
+  wynik <- Posts[Location != '', .(Count = .N), by = Location]
+  wynik <- wynik[order(-Count)]
+  wynik[,.SD[1:10]]
+}
+
+```
+
+### Sprawdzenie poprawności wyników i porównanie czasów wykonania
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+dplyr::all_equal(df_sql_2(Users, Posts), df_base_2(Users, Posts))
+dplyr::all_equal(df_sql_2(Users, Posts), df_dplyr_2(Users, Posts))
+dplyr::all_equal(df_sql_2(Users, Posts), df_table_2(Users, Posts))
+microbenchmark::microbenchmark(
+  sqldf = df_sql_2(Users, Posts),
+  base = df_base_2(Users, Posts),
+  dplyr = df_dplyr_2(Users, Posts),
+  data.table = df_table_2(Users, Posts)
+)
+
+```
+
+# Zadanie 3
+
+Wybór ogólnej ilości złotych odznak (Class = 1) zdobytych w danym roku
+
+## Zapytanie sql
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_sql_3 <- function(Badges){
+  sqldf(
+    "SELECT Year, SUM(Number) AS TotalNumber
+    FROM (
+      SELECT
+      Name,
+      COUNT(*) AS Number,
+      STRFTIME('%Y', Badges.Date) AS Year
+      FROM Badges
+      WHERE Class = 1
+      GROUP BY Name, Year
+    )
+    GROUP BY Year
+    ORDER BY TotalNumber"
+    
+  )
+}
+
+```
+
+## Zapytanie bazowe
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_base_3 <- function(Badges){
+  
+  # Wybór roku oraz dołączenie go do ramki 
+  Year <-strftime(Badges$Date, "%Y")
+  Badges2 <- cbind(Badges, Year)
+  
+  # # Wykonanie operacji na powyższej ramce  oraz nadanie brakującej nazwy kolumny
+  aggregate(
+    Badges2[Badges2$Class == 1, c('Name')],
+    Badges2[Badges2$Class == 1, c('Name', 'Year'), drop = FALSE],
+    length
+  ) -> pomocnicze
+  names(pomocnicze)[3] <- "Number"
+  
+  # Wykonanie operacji na otrzymanej wyżej ramce i wybór odpowiednich kolumn
+  aggregate(
+    pomocnicze[,c("Number")],
+    pomocnicze[,"Year", drop = FALSE],
+    function(x) sum(x)
+  ) -> wynik
+  
+  # Formatowanie wyniku
+  names(wynik)[2] <- "TotalNumber"
+  wynik[order(wynik$TotalNumber),]
+}
+
+```
+
+## Zapytanie dplyr
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_dplyr_3 <- function(Badges){
+  
+  # Wybór roku oraz dołączenie go do ramki
+  Year <-strftime(Badges$Date, "%Y")
+  Badges <- mutate(Badges, Year = Year)
+  
+  # # Wykonanie operacji na powyższej ramce  oraz nadanie brakującej nazwy kolumny
+  wybor <- 
+    select(filter(Badges, Class == 1), Year, Name) %>%
+    count(Name, Year)
+  wybor = rename(wybor, Number = n)
+  
+  # Wykonanie operacji na powyższej ramce oraz wybór odpowiednich kolumn
+  wynik <- 
+    select(wybor, Year, Number) %>%
+    group_by(Year) %>%
+    summarise(TotalNumber = sum(Number))
+  wynik
+}
+
+```
+
+## Zapytanie data.table
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_table_3 <- function(Badges){
+  
+  # Zmiana typu na data.table
+  Badges <- as.data.table(Badges)
+  
+  # Wybór roku oraz dołączenie go do ramki
+  Badges <- Badges[,Year := strftime(Date, "%Y")] 
+  
+  # Wykonanie operacji na powyższej ramce 
+  wybor <- Badges[Class == 1, .(Number = .N), by = .(Name,Year)]
+  
+  # Wykonanie operacji na powyższej ramce oraz wybór odpowiednich kolumn
+  wynik <- wybor[,.(TotalNumber = sum(Number)), by = .(Year)][order(TotalNumber)]
+  wynik
+}
+
+```
+
+### Sprawdzenie poprawności wyników i porównanie czasów wykonania
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+dplyr::all_equal(df_sql_3(Badges), df_base_3(Badges))
+dplyr::all_equal(df_sql_3(Badges), df_dplyr_3(Badges))
+dplyr::all_equal(df_sql_3(Badges), df_table_3(Badges))
+microbenchmark::microbenchmark(
+  sqldf = df_sql_3(Badges),
+  base =  df_base_3(Badges),
+  dplyr = df_dplyr_3(Badges),
+  data.table = df_table_3(Badges)
+)
+
+```
+
+# Zadanie 4
+
+Wybieramy informację o dziesięciu urzytkowników których średnia odpowiedzi (PostTypeId = 2) jest największą i dodatkowo najmniejsze mają najniższe ID.
+  
+## Zapytanie sql
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_sql_4 <- function(Posts, Users){
+  sqldf(
+    "SELECT
+    Users.AccountId,
+    Users.DisplayName,
+    Users.Location,
+    AVG(PostAuth.AnswersCount) as AverageAnswersCount
+    FROM
+    (
+      SELECT
+      AnsCount.AnswersCount,
+      Posts.Id,
+      Posts.OwnerUserId
+      FROM (
+        SELECT Posts.ParentId, COUNT(*) AS AnswersCount
+        FROM Posts
+        WHERE Posts.PostTypeId = 2
+        GROUP BY Posts.ParentId
+      ) AS AnsCount
+      JOIN Posts ON Posts.Id = AnsCount.ParentId
+    ) AS PostAuth
+    JOIN Users ON Users.AccountId=PostAuth.OwnerUserId
+    GROUP BY OwnerUserId
+    ORDER BY AverageAnswersCount DESC, AccountId ASC
+    LIMIT 10"
+  )
+}
+
+```
+
+## Zapytanie bazowe
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_base_4 <- function(Posts, Users){
+  
+  # Wykonanie operacji na odpowiedniej podramce ramki Posts oraz dodanie brakującej nazwy kolumny
+  aggregate(
+    Posts[Posts$PostTypeId == 2, "ParentId"],
+    Posts[Posts$PostTypeId == 2, "ParentId", drop = FALSE],
+    length
+    ) -> AnsCount
+  names(AnsCount)[2] <- "AnswersCount"
+  
+  # Złączenie ramek Posts i powyższej oraz wybór odpowiednich kolumn
+  PostAuth <-merge(Posts,AnsCount, by.x = "Id", by.y = "ParentId")
+  PostAuth <- PostAuth[,c("AnswersCount", "Id", "OwnerUserId")]
+  
+  # Złączenie ramek Users i powyższej
+  wynik <- merge(Users, PostAuth, by.x = "AccountId", by.y = "OwnerUserId")
+  
+  # Wykonanie operacji na odpowiedniej podramce powyższej ramki Posts 
+  aggregate(
+    wynik[ ,c("AnswersCount")],
+    wynik[ ,c("AccountId", "DisplayName", "Location"), drop = FALSE],
+    mean
+  ) -> wynik
+  
+  # Formatowanie wyniku
+  names(wynik)[4] <- "AverageAnswersCount"
+  wynik <- wynik[order( -wynik$AverageAnswersCount, wynik$AccountId),]
+  rownames(wynik) <- NULL
+  head(wynik,10)
+}
+
+```
+
+## Zapytanie dplyr
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_dplyr_4 <- function(Posts, Users){
+  
+  # Wykonanie operacji na ramce Posts i formatowanie
+  AnsCount <-
+    select(filter(Posts, PostTypeId == 2), ParentId) %>%
+    count(ParentId)
+  AnsCount = rename(AnsCount, AnswersCount = n)  
+  
+  # Złączenie powyższej ramki oraz ramki Posts
+  PostAuth <- inner_join(
+    select(Posts, Id, OwnerUserId), select(AnsCount, AnswersCount, ParentId), by = c("Id" = "ParentId"))
+  
+  # Złączenie powyższej ramki oraz ramki Users
+  wynik <- inner_join(Users, PostAuth, by = c("AccountId" = "OwnerUserId"))
+  
+  # Wykonanie operacji na otrzymanej powyżej ramce
+  wynik <- 
+    select(wynik, AccountId, DisplayName, Location, AnswersCount) %>%
+    group_by(AccountId, DisplayName, Location) %>%
+    summarise(AverageAnswersCount = mean(AnswersCount), .groups = 'drop')
+  
+  # Formatowanie wyników
+  wynik <- arrange(wynik, desc(AverageAnswersCount), AccountId)
+  slice(wynik, 1:10)
+              
+}
+
+```
+
+## Zapytanie data.table
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_table_4 <- function(Posts, Users){
+  
+  # Zmiana typu na data.table
+  Posts <- as.data.table(Posts)
+  Users <- as.data.table(Users)
+  
+  # Wykonanie operacji na ramce Posts
+  AnsCount <- Posts[PostTypeId == 2, .(AnswersCount = .N), by = ParentId]
+  
+  # Złączenie powyższej ramki oraz ramki Posts
+  setkey(Posts, Id)
+  setkey(AnsCount, ParentId)
+  PostAuth <- Posts[AnsCount, nomatch = 0, .(Id, AnswersCount, OwnerUserId)]
+  
+  # Złączenie powyższej ramki oraz ramki Users
+  setkey(Users, AccountId)
+  setkey(PostAuth, OwnerUserId)
+  Users <- Users[PostAuth, nomatch = 0]
+  
+  # Wykonanie operacji na otrzymanej powyżej ramce oraz formatowanie wyników
+  wynik <- Users[,
+                 .(AverageAnswersCount = mean(AnswersCount)), 
+                 by = .(AccountId, DisplayName, Location)][order(-AverageAnswersCount, AccountId)]
+  wynik[,.SD[1:10]] 
+}
+
+```
+
+### Sprawdzenie poprawności wyników i porównanie czasów wykonania
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+dplyr::all_equal(df_sql_4(Posts,Users), df_base_4(Posts,Users))
+dplyr::all_equal(df_sql_4(Posts,Users), df_dplyr_4(Posts,Users))
+dplyr::all_equal(df_sql_4(Posts,Users), df_table_4(Posts,Users))
+microbenchmark::microbenchmark(
+  sqldf = df_sql_4(Posts,Users),
+  base = df_base_4(Posts,Users),
+  dplyr = df_dplyr_4(Posts,Users),
+  data.table = df_table_4(Posts,Users)
+)
+```
+
+# Zadanie 5
+
+Wybieramy informacje o 10 postach, dla których różnica głosów łącznie (zaakceptowanych przez twórce, pozytywnych i ulubionych) przed 2020 i po 2020 była największa, nowych głosów jest więcej niz starych i tytuł posta z tymi głosami nie jest pusty. 
+
+## Zapytanie sql
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_sql_5 <- function(Posts, Votes){
+  sqldf(
+        "SELECT Posts.Title, Posts.Id,
+        STRFTIME('%Y-%m-%d', Posts.CreationDate) AS Date,
+        VotesByAge.Votes
+        FROM Posts
+        JOIN (
+          SELECT
+          PostId,
+          MAX(CASE WHEN VoteDate = 'new' THEN Total ELSE 0 END) NewVotes,
+          MAX(CASE WHEN VoteDate = 'old' THEN Total ELSE 0 END) OldVotes,
+          SUM(Total) AS Votes
+          FROM (
+            SELECT
+            PostId,
+            CASE STRFTIME('%Y', CreationDate)
+            WHEN '2021' THEN 'new'
+            WHEN '2020' THEN 'new'
+            ELSE 'old'
+            END VoteDate,
+            COUNT(*) AS Total
+            FROM Votes
+            WHERE VoteTypeId IN (1, 2, 5)
+            GROUP BY PostId, VoteDate
+          ) AS VotesDates
+          GROUP BY VotesDates.PostId
+          HAVING NewVotes > OldVotes
+        ) AS VotesByAge ON Posts.Id = VotesByAge.PostId
+        WHERE Title NOT IN ('')
+        ORDER BY Votes DESC
+        LIMIT 10")
+}
+```
+
+## Zapytanie bazowe
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_base_5 <- function(Posts,Votes){
+  
+  # Wybór roku
+  CreationDate <- strftime(Votes$CreationDate, "%Y")
+  
+  # Dodanie do ramki Votes kolumny, której wartość zależy od daty oddanie głosu
+  VoteDate <- ifelse(CreationDate == "2021" | CreationDate == "2020", "new", "old")
+  VotesDates <- cbind(Votes, VoteDate)
+  
+  # Wykonanie operacji na powyższej ramce i dodanie brakującej nazwy kolumny
+  aggregate(
+    VotesDates[VotesDates$VoteTypeId == 1 | VotesDates$VoteTypeId == 2 | VotesDates$VoteTypeId == 5,
+               "VoteDate"],
+    VotesDates[VotesDates$VoteTypeId == 1 | VotesDates$VoteTypeId == 2 | VotesDates$VoteTypeId == 5,
+               c("VoteDate","PostId")],
+    length
+  ) -> VotesDates
+  names(VotesDates)[3] <- "Total"
+  
+  # Stworzenie nowej ramki powstałej z powyższej poprzez dodanie dwóch nowych kolumn i nadanie brakujących nazw
+  NewVotes <- ifelse(VotesDates$VoteDate == "new", VotesDates$Total, 0)
+  OldVotes <- ifelse(VotesDates$VoteDate == "old", VotesDates$Total, 0)
+  NewVotes <- as.data.frame(cbind(VotesDates$PostId,VotesDates$Total ,NewVotes, OldVotes))
+  names(NewVotes)[1:2] <- c("PostId", "Total")
+  
+  # Wykonanie dwóch rożnych operacji na powyższej ramce i formatowanie wyników
+  aggregate(
+    NewVotes[,c("NewVotes", "OldVotes")],
+    NewVotes[,c("PostId"), drop = FALSE],
+    function(x) max(x)
+  ) -> MaxVotes
+  names(MaxVotes)[2:3] <- c("NewVotes", "OldVotes")
+  aggregate(
+    NewVotes[,c("Total")],
+    NewVotes[,c("PostId"), drop = FALSE],
+    function(x) sum(x)
+  ) -> SumTotal
+  names(SumTotal)[2] <- "Votes"
+  
+  # Złączenie powstałych powyżej ramek, wybór odpowiedniej podramki, formatowanie wyniku
+  VotesByAge <- merge(MaxVotes, SumTotal, by = "PostId")
+  VotesByAge <- VotesByAge[VotesByAge$NewVotes > VotesByAge$OldVotes,]
+  rownames(VotesByAge) <- NULL
+  as.integer(VotesByAge$PostId) -> VotesByAge$PostId
+  as.integer(VotesByAge$Votes) -> VotesByAge$Votes
+  
+  # Złączenie powyższej ramki oraz Posts
+  wynik <- merge(Posts, VotesByAge, by.x = "Id", by.y = "PostId")
+  
+  # Wybór daty i dołączenie jej do powyższej ramki
+  Date <- strftime(wynik$CreationDate, "%Y-%m-%d")
+  wynik <- cbind(wynik, Date)
+  
+  # Wybór odpowiedniej podramki z powyższej ramki oraz formatowanie wyniku 
+  wynik <- wynik[wynik$Title != '',c("Title", "Id", "Date", "Votes")]
+  wynik <- wynik[order(-wynik$Votes), ]
+  wynik <- head(wynik, 10)
+  rownames(wynik) <- NULL
+  wynik
+}
+
+```
+
+## Zapytanie dplyr
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_dplyr_5 <- function(Posts, Votes){
+  
+  # Wybór roku
+  Data <- strftime(Votes$CreationDate, "%Y")
+  
+  # Dodanie do ramki Votes kolumny, której wartość zależy od daty oddanie głosu
+  Votes <-
+    Votes %>%
+    mutate(VoteDate = if_else(Data == 2021 | Data == 2020, 'new', 'old'))
+  
+  # Wykonanie operacji na powyższej ramce i formatowanie wyniku
+  VotesDates <- 
+    select(filter(Votes, VoteTypeId %in% c(1,2,5)), PostId, VoteDate) %>%
+    group_by(PostId, VoteDate)%>%
+    count(VoteDate)
+  VotesDates <- rename(VotesDates, Total = n)
+  
+  # Dodanie do powyższej ramki dwóch nowych kolumn
+  VotesDates <- 
+    VotesDates %>%
+    mutate(NewVotes = if_else(VoteDate == 'new', Total, as.integer(0)))
+  VotesDates <- 
+    VotesDates %>%
+    mutate(OldVotes = if_else(VoteDate == 'old', Total, as.integer(0)))
+  
+  # Wykonanie operacji na powstałej wyżej podramce i wybór odpowiedniej podramki
+  VotesByAge <- 
+    select(VotesDates, PostId, NewVotes, OldVotes, Total) %>%
+    group_by(PostId) %>%
+    summarise(NewVotes = max(NewVotes), OldVotes = max(OldVotes), Votes = sum(Total))
+  VotesByAge <- filter(VotesByAge, NewVotes > OldVotes)
+  
+  # Złączenie powyższej ramki oraz Posts i dodanie kolumny będącą datą
+  Posts <- inner_join(Posts, VotesByAge, by = c("Id" = "PostId"))
+  Posts <- 
+    Posts %>%
+    mutate(Date = strftime(CreationDate, '%Y-%m-%d'))
+  
+  # Wybór odpowiedniej podramki z powyższej ramki oraz formatowanie wyniku
+  wynik <- select(filter(Posts, Title != ''), Title, Id, Date, Votes)
+  wynik <- arrange(wynik, desc(Votes))
+  slice(wynik, 1:10)
+  
+}
+```
+
+## Zapytanie data.table
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+df_table_5 <- function(Posts, Votes){
+  
+  # Zmiana typu na data table
+  Posts <- as.data.table(Posts)
+  Votes <- as.data.table(Votes)
+  
+  # Wybór roku i dodanie go do ramki Votes
+  Votes <- Votes[,VoteDate := strftime(CreationDate, "%Y")]
+  
+  # Dodanie nowej kolumny do powyższej ramki zależnej od roku
+  Votes <- Votes[VoteDate == "2021" | VoteDate == "2020", VoteDate := "new"]
+  Votes <- Votes[VoteDate != "new", VoteDate := "old"]
+  
+  # Wykonanie operacji na powyższej ramce
+  VotesDates <- Votes[VoteTypeId %in% c(1,2,5), .(Total = .N), by = .(PostId, VoteDate)]
+  VotesDates <- VotesDates[VoteDate != 'new', NewVotes := 0]
+  VotesDates <- VotesDates[VoteDate == 'new', NewVotes := Total]
+  VotesDates <- VotesDates[VoteDate != 'old', OldVotes := 0]
+  VotesDates <- VotesDates[VoteDate == 'old', OldVotes := Total]
+  
+  # Wykonanie operacji na powyższej ramce oraz wybór odpowiedniej podramki
+  VotesByAge <- VotesDates[, .(NewVotes = max(NewVotes), OldVotes = max(OldVotes), Votes = sum(Total)),
+                           by = .(PostId)]
+  VotesByAge <- VotesByAge[NewVotes > OldVotes]
+  
+  # Złączenie powyższej ramki oraz Posts i dodanie nowej kolumny będącej datą
+  setkey(Posts, Id)
+  setkey(VotesByAge, PostId)
+  Posts <- Posts[VotesByAge, nomatch = 0]
+  Posts <- Posts[, Date := strftime(CreationDate, "%Y-%m-%d")]
+  
+  # WYbór odpowiedniej podramki z powyższej ramki i formatowanie wyniku
+  wynik <- Posts[Title != '', .(Title, Id, Date, Votes)][order(-Votes)]
+  wynik[,.SD[1:10]]
+}
+
+```
+
+### Sprawdzenie poprawności wyników i porównanie czasów wykonania
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+dplyr::all_equal(df_sql_5(Posts,Votes), df_base_5(Posts,Votes))
+dplyr::all_equal(df_sql_5(Posts,Votes), df_dplyr_5(Posts,Votes))
+dplyr::all_equal(df_sql_5(Posts,Votes), df_table_5(Posts,Votes))
+microbenchmark::microbenchmark(
+  sqldf = df_sql_5(Posts,Votes),
+  base = df_base_5(Posts,Votes),
+  dplyr = df_dplyr_5(Posts,Votes),
+  data.table = df_table_5(Posts,Votes)
+)
+```
+
+# Posumowanie
+
+Podsumowując z wykonanych sprawdzeń wynika, że wszystkie funkcja zostały wyknane poprawnie i dają tożsame wyniki. Jednakże ciężko stwierdzić, który z pakietów jest najlepszy, ponieważ testy benchmarkiem w zależności od zadania czasami faworyzują jeden sposób rozwiązania a innym razem inny. 
+  
+Mnie osobiście najprzyjemniej pisało się używając pakietu data.table, ponieważ kod oraz sposób implementacji był dosyć przejrzysty i łatwo było rozwiązać przedstawione zadania.
